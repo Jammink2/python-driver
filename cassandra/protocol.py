@@ -671,7 +671,7 @@ class ResultMessage(_MessageType):
         flags = read_int(f)
         colcount = read_int(f)
 
-        if flags & self._METADATA_CHANGED_FLAG:
+        if flags & cls._METADATA_CHANGED_FLAG:
             new_metadata_id = read_short(f)
         else:
             new_metadata_id = None

@@ -202,7 +202,7 @@ class ProtocolVersion(object):
 
     @classmethod
     def uses_prepared_result_hash(cls, version):
-        return version >= cls.V5 and version != cls.DSE_V1
+        return version >= cls.V5
 
     @classmethod
     def uses_error_code_map(cls, version):
