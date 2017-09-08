@@ -2247,14 +2247,14 @@ class Session(object):
         future = ResponseFuture(self, message, query=None, timeout=self.default_timeout)
         try:
             future.send_request()
-            query_id, bind_metadata, pk_indexes, result_metadata = future.result()
+            query_id, bind_metadata, pk_indexes, result_metadata, result_metadata_id = future.result()
         except Exception:
             log.exception("Error preparing query:")
             raise
 
         prepared_statement = PreparedStatement.from_message(
             query_id, bind_metadata, pk_indexes, self.cluster.metadata, query, self.keyspace,
-            self._protocol_version, result_metadata)
+            self._protocol_version, result_metadata, result_metadata_id)
         prepared_statement.custom_payload = future.custom_payload
 
         self.cluster.add_prepared(query_id, prepared_statement)
@@ -3599,10 +3599,10 @@ class ResponseFuture(object):
                 else:
                     results = getattr(response, 'results', None)
                     if results is not None and response.kind == RESULT_KIND_ROWS:
-                        if self.prepared_statement and response.result_metadata_id:
-                            # set new prepared metadata if it's changed
+                        new_metadata_id = response.result_metadata_id
+                        if self.prepared_statement and new_metadata_id is not None:
                             self.prepared_statement.result_metadata_id = (
-                                response.result_metadata_id
+                                new_metadata_id
                             )
                         self._paging_state = response.paging_state
                         self._col_types = response.col_types
