@@ -514,7 +514,8 @@ class QueryMessage(_MessageType):
     name = 'QUERY'
 
     def __init__(self, query, consistency_level, serial_consistency_level=None,
-                 fetch_size=None, paging_state=None, timestamp=None):
+                 fetch_size=None, paging_state=None, timestamp=None,
+                 result_metadata_id=None):
         self.query = query
         self.consistency_level = consistency_level
         self.serial_consistency_level = serial_consistency_level
@@ -522,6 +523,7 @@ class QueryMessage(_MessageType):
         self.paging_state = paging_state
         self.timestamp = timestamp
         self._query_params = None  # only used internally. May be set to a list of native-encoded values to have them sent with the request.
+        self.result_metadata_id = result_metadata_id
 
     def send_body(self, f, protocol_version):
         write_longstring(f, self.query)
@@ -601,6 +603,7 @@ class ResultMessage(_MessageType):
     _FLAGS_GLOBAL_TABLES_SPEC = 0x0001
     _HAS_MORE_PAGES_FLAG = 0x0002
     _NO_METADATA_FLAG = 0x0004
+    _METADATA_CHANGED_FLAG = 0x0008
 
     def __init__(self, kind, results, paging_state=None, col_types=None):
         self.kind = kind
@@ -656,13 +659,22 @@ class ResultMessage(_MessageType):
     @classmethod
     def recv_results_prepared(cls, f, protocol_version, user_type_map):
         query_id = read_binary_string(f)
+        if ProtocolVersion.uses_prepare_flags(protocol_version):
+            result_metadata_id = read_short(f)
+        else:
+            result_metadata_id = None
         bind_metadata, pk_indexes, result_metadata = cls.recv_prepared_metadata(f, protocol_version, user_type_map)
-        return query_id, bind_metadata, pk_indexes, result_metadata
+        return query_id, bind_metadata, pk_indexes, result_metadata, result_metadata_id
 
     @classmethod
     def recv_results_metadata(cls, f, user_type_map):
         flags = read_int(f)
         colcount = read_int(f)
+
+        if flags & self._METADATA_CHANGED_FLAG:
+            new_metadata_id = read_short(f)
+        else:
+            new_metadata_id = None
 
         if flags & cls._HAS_MORE_PAGES_FLAG:
             paging_state = read_binary_longstring(f)
@@ -688,7 +700,7 @@ class ResultMessage(_MessageType):
             colname = read_string(f)
             coltype = cls.read_type(f, user_type_map)
             column_metadata.append((colksname, colcfname, colname, coltype))
-        return paging_state, column_metadata
+        return paging_state, column_metadata, new_metadata_id
 
     @classmethod
     def recv_prepared_metadata(cls, f, protocol_version, user_type_map):
