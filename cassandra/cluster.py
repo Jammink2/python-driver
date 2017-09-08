@@ -1748,6 +1748,21 @@ class Cluster(object):
                         if not success:
                             log.debug("Got unexpected response when preparing "
                                       "statement on host %s: %r", host, response)
+            """
+            #V5 protocol / No need to set the keyspace
+            chunks = []
+            for i in range(0, len(statements), 10):
+                chunks.append(statements[i:i + 10])
+
+            for ks_chunk in chunks:
+                messages = [PrepareMessage(query=s.query_string, keyspace=s.keyspace) for s in ks_chunk]
+                # TODO: make this timeout configurable somehow?
+                responses = connection.wait_for_responses(*messages, timeout=5.0, fail_on_error=False)
+                for success, response in responses:
+                    if not success:
+                        log.debug("Got unexpected response when preparing "
+                                  "statement on host %s: %r", host, response)
+            """
 
             log.debug("Done preparing all known prepared statements against host %s", host)
         except OperationTimedOut as timeout:
@@ -2126,11 +2141,13 @@ class Session(object):
 
         if isinstance(query, SimpleStatement):
             query_string = query.query_string
+            statement_keyspace = query.keyspace
             if parameters:
                 query_string = bind_params(query_string, parameters, self.encoder)
             message = QueryMessage(
                 query_string, cl, serial_cl,
-                fetch_size, timestamp=timestamp)
+                fetch_size, timestamp=timestamp,
+                keyspace=statement_keyspace)
         elif isinstance(query, BoundStatement):
             prepared_statement = query.prepared_statement
             message = ExecuteMessage(
@@ -2143,9 +2160,10 @@ class Session(object):
                     "BatchStatement execution is only supported with protocol version "
                     "2 or higher (supported in Cassandra 2.0 and higher).  Consider "
                     "setting Cluster.protocol_version to 2 to support this operation.")
+            statement_keyspace = query.keyspace if ProtocolVersion.uses_keyspace_flag(self._protocol_version) else None
             message = BatchMessage(
                 query.batch_type, query._statements_and_parameters, cl,
-                serial_cl, timestamp)
+                serial_cl, timestamp, statement_keyspace)
 
         message.tracing = trace
 
@@ -2252,8 +2270,9 @@ class Session(object):
             log.exception("Error preparing query:")
             raise
 
+        prepared_keyspace = message.keyspace if message.keyspace else self.keyspace
         prepared_statement = PreparedStatement.from_message(
-            query_id, bind_metadata, pk_indexes, self.cluster.metadata, query, self.keyspace,
+            query_id, bind_metadata, pk_indexes, self.cluster.metadata, query, prepared_keyspace,
             self._protocol_version, result_metadata)
         prepared_statement.custom_payload = future.custom_payload
 
@@ -2262,13 +2281,13 @@ class Session(object):
         if self.cluster.prepare_on_all_hosts:
             host = future._current_host
             try:
-                self.prepare_on_all_hosts(prepared_statement.query_string, host)
+                self.prepare_on_all_hosts(prepared_statement.query_string, host, prepared_keyspace)
             except Exception:
                 log.exception("Error preparing query on all hosts:")
 
         return prepared_statement
 
-    def prepare_on_all_hosts(self, query, excluded_host):
+    def prepare_on_all_hosts(self, query, excluded_host, keyspace=None):
         """
         Prepare the given query on all hosts, excluding ``excluded_host``.
         Intended for internal use only.
@@ -2276,7 +2295,8 @@ class Session(object):
         futures = []
         for host in tuple(self._pools.keys()):
             if host != excluded_host and host.is_up:
-                future = ResponseFuture(self, PrepareMessage(query=query), None, self.default_timeout)
+                future = ResponseFuture(self, PrepareMessage(query=query, keyspace=keyspace),
+                                            None, self.default_timeout)
 
                 # we don't care about errors preparing against specific hosts,
                 # since we can always prepare them as needed when the prepared
@@ -3659,7 +3679,8 @@ class ResponseFuture(object):
 
                     current_keyspace = self._connection.keyspace
                     prepared_keyspace = prepared_statement.keyspace
-                    if prepared_keyspace and current_keyspace != prepared_keyspace:
+                    if not ProtocolVersion.uses_keyspace_flag(self.session.cluster.protocol_version) \
+                            and prepared_keyspace  and current_keyspace != prepared_keyspace:
                         self._set_final_exception(
                             ValueError("The Session's current keyspace (%s) does "
                                        "not match the keyspace the statement was "
@@ -3669,7 +3690,10 @@ class ResponseFuture(object):
 
                     log.debug("Re-preparing unrecognized prepared statement against host %s: %s",
                               host, prepared_statement.query_string)
-                    prepare_message = PrepareMessage(query=prepared_statement.query_string)
+                    prepared_keyspace = prepared_statement.keyspace \
+                        if ProtocolVersion.uses_keyspace_flag(self.session.cluster.protocol_version) else None
+                    prepare_message = PrepareMessage(query=prepared_statement.query_string,
+                                                     keyspace=prepared_keyspace)
                     # since this might block, run on the executor to avoid hanging
                     # the event loop thread
                     self.session.submit(self._reprepare, prepare_message, host, connection, pool)
