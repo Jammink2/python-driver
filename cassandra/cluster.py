@@ -2141,7 +2141,7 @@ class Session(object):
 
         if isinstance(query, SimpleStatement):
             query_string = query.query_string
-            statement_keyspace = query.keyspace
+            statement_keyspace = query.keyspace if ProtocolVersion.uses_keyspace_flag(self._protocol_version) else None
             if parameters:
                 query_string = bind_params(query_string, parameters, self.encoder)
             message = QueryMessage(
