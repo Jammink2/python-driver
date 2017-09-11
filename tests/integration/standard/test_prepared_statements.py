@@ -21,7 +21,7 @@ except ImportError:
     import unittest  # noqa
 from cassandra import InvalidRequest
 
-from cassandra import ConsistencyLevel
+from cassandra import ConsistencyLevel, ProtocolVersion
 from cassandra.cluster import Cluster
 from cassandra.query import PreparedStatement, UNSET_VALUE, tuple_factory
 from tests.integration import get_server_versions, greaterthanorequalcass4_0, BasicSharedKeyspaceUnitTestCase
@@ -442,12 +442,13 @@ class PreparedStatementInvalidationTest(BasicSharedKeyspaceUnitTestCase):
 
         The query id from the prepared statment must have changed
         """
+        self.cluster.protocol_version = ProtocolVersion.V5
         prepared_statement = self.session.prepare("SELECT * from {} WHERE a = ?".format(self.table_name))
         id_before = prepared_statement.query_id
 
         self.session.execute("ALTER TABLE {} ADD c int".format(self.table_name))
         bound_statement = prepared_statement.bind((1, ))
-        self.session.execute(bound_statement)
+        self.session.execute(bound_statement, timeout=1)
 
         id_after = prepared_statement.query_id
 

@@ -662,12 +662,16 @@ class ResultMessage(_MessageType):
     @classmethod
     def recv_results_prepared(cls, f, protocol_version, user_type_map):
         query_id = read_binary_string(f)
-        # if ProtocolVersion.uses_prepare_flags(protocol_version):
-        #     result_metadata_id = read_short(f)
-        # else:
-        #     result_metadata_id = None
-        (bind_metadata, pk_indexes,
-         result_metadata, result_metadata_id) = cls.recv_prepared_metadata(f, protocol_version, user_type_map)
+        print 'protocol version: {}'.format(protocol_version)
+        if ProtocolVersion.uses_prepare_flags(protocol_version):
+            result_metadata_id = read_short(f)
+        else:
+            result_metadata_id = None
+
+        # result_metadata_id only comes back from recv_prepared_metadata after
+        # executing, not preparing
+        (bind_metadata, pk_indexes, result_metadata,
+         _) = cls.recv_prepared_metadata(f, protocol_version, user_type_map)
         return query_id, bind_metadata, pk_indexes, result_metadata, result_metadata_id
 
     @classmethod
@@ -714,10 +718,6 @@ class ResultMessage(_MessageType):
         if protocol_version >= 4:
             num_pk_indexes = read_int(f)
             pk_indexes = [read_short(f) for _ in range(num_pk_indexes)]
-        if protocol_version >= 5:
-            result_metadata_id = read_short(f)
-        else:
-            result_metadata_id = None
 
         glob_tblspec = bool(flags & cls._FLAGS_GLOBAL_TABLES_SPEC)
         if glob_tblspec:
@@ -736,7 +736,7 @@ class ResultMessage(_MessageType):
             bind_metadata.append(ColumnMetadata(colksname, colcfname, colname, coltype))
 
         if protocol_version >= 2:
-            _, result_metadata, _ = cls.recv_results_metadata(f, user_type_map)
+            _, result_metadata, result_metadata_id = cls.recv_results_metadata(f, user_type_map)
             return bind_metadata, pk_indexes, result_metadata, result_metadata_id
         else:
             return bind_metadata, pk_indexes, None, None
@@ -803,7 +803,8 @@ class ExecuteMessage(_MessageType):
     name = 'EXECUTE'
     def __init__(self, query_id, query_params, consistency_level,
                  serial_consistency_level=None, fetch_size=None,
-                 paging_state=None, timestamp=None, skip_meta=False):
+                 paging_state=None, timestamp=None, skip_meta=False,
+                 result_metadata_id=None):
         self.query_id = query_id
         self.query_params = query_params
         self.consistency_level = consistency_level
@@ -812,9 +813,12 @@ class ExecuteMessage(_MessageType):
         self.paging_state = paging_state
         self.timestamp = timestamp
         self.skip_meta = skip_meta
+        self.result_metadata_id = result_metadata_id
 
     def send_body(self, f, protocol_version):
         write_string(f, self.query_id)
+        if ProtocolVersion.uses_prepared_result_hash(ProtocolVersion):
+            write_short(f, self.result_metadata_id)
         if protocol_version == 1:
             if self.serial_consistency_level:
                 raise UnsupportedOperation(
