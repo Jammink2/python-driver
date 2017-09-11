@@ -355,7 +355,7 @@ class Cluster(object):
     server will be automatically used.
     """
 
-    protocol_version = ProtocolVersion.V4
+    protocol_version = ProtocolVersion.V5
     """
     The maximum version of the native protocol to use.
 
@@ -369,7 +369,7 @@ class Cluster(object):
 
     """
 
-    allow_beta_protocol_version = False
+    allow_beta_protocol_version = True
     """
     Setting true injects a flag in all messages that makes the server accept and use "beta" protocol version.
     Used for testing new protocol features incrementally before the new version is complete.
@@ -746,7 +746,7 @@ class Cluster(object):
                  ssl_options=None,
                  sockopts=None,
                  cql_version=None,
-                 protocol_version=_NOT_SET,
+                 protocol_version=ProtocolVersion.V5,
                  executor_threads=2,
                  max_schema_agreement_wait=10,
                  control_connection_timeout=2.0,
@@ -761,7 +761,7 @@ class Cluster(object):
                  prepare_on_all_hosts=True,
                  reprepare_on_up=True,
                  execution_profiles=None,
-                 allow_beta_protocol_version=False,
+                 allow_beta_protocol_version=True,
                  timestamp_generator=None,
                  idle_heartbeat_timeout=30):
         """
