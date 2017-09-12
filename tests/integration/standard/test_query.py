@@ -24,8 +24,7 @@ from cassandra import ProtocolVersion
 from cassandra import ConsistencyLevel, Unavailable, InvalidRequest, cluster
 from cassandra.query import (PreparedStatement, BoundStatement, SimpleStatement,
                              BatchStatement, BatchType, dict_factory, TraceUnavailable)
-from cassandra.protocol import PrepareMessage
-from cassandra.cluster import Cluster, NoHostAvailable, ResponseFuture, ExecutionProfile
+from cassandra.cluster import Cluster, NoHostAvailable, ExecutionProfile
 from cassandra.policies import HostDistance, RoundRobinPolicy, WhiteListRoundRobinPolicy
 from tests.integration import use_singledc, PROTOCOL_VERSION, BasicSharedKeyspaceUnitTestCase, get_server_versions, \
     greaterthanprotocolv3, MockLoggingHandler, get_supported_protocol_versions, local, get_cluster, setup_keyspace, \
@@ -1251,6 +1250,7 @@ class QueryKeyspaceTests(BaseKeyspaceTests):
 
 @greaterthanorequalcass40
 class SimpleWithKeyspaceTests(QueryKeyspaceTests, unittest.TestCase):
+    @unittest.skip
     def test_lower_protocol(self):
         cluster = Cluster(protocol_version=ProtocolVersion.V4)
         session = cluster.connect(self.ks_name)
@@ -1314,12 +1314,12 @@ class PreparedWithKeyspaceTests(BaseKeyspaceTests, unittest.TestCase):
 
     def test_prepared_with_keyspace(self):
         query = "SELECT * from {} WHERE k = ?".format(self.table_name)
-        prepared_statement = self._prepare_with_keyspace(query, self.ks_name)
+        prepared_statement = self.session.prepare(query, keyspace=self.ks_name)
 
         results = self.session.execute(prepared_statement, (1, ))
         self.assertEqual(results[0], (1, 1))
 
-        prepared_statement_alternative = self._prepare_with_keyspace(query, self.alternative_ks)
+        prepared_statement_alternative = self.session.prepare(query, keyspace=self.alternative_ks)
 
         self.assertNotEqual(prepared_statement.query_id, prepared_statement_alternative.query_id)
 
@@ -1333,8 +1333,8 @@ class PreparedWithKeyspaceTests(BaseKeyspaceTests, unittest.TestCase):
         self.cluster.add_execution_profile("only_first", only_first)
 
         query = "SELECT v from {} WHERE k = ?".format(self.table_name)
-        prepared_statement = self._prepare_with_keyspace(query, self.ks_name)
-        prepared_statement_alternative = self._prepare_with_keyspace(query, self.alternative_ks)
+        prepared_statement = self.session.prepare(query, keyspace=self.ks_name)
+        prepared_statement_alternative = self.session.prepare(query, keyspace=self.alternative_ks)
 
         get_node(1).start(wait_for_binary_proto=True, wait_other_notice=True)
 
@@ -1354,36 +1354,8 @@ class PreparedWithKeyspaceTests(BaseKeyspaceTests, unittest.TestCase):
         """
         self.cluster.prepare_on_all_hosts = False
         query = "SELECT k from {} WHERE k = ?".format(self.table_name)
-        prepared_statement = self._prepare_with_keyspace(query, self.ks_name)
+        prepared_statement = self.session.prepare(query, keyspace=self.ks_name)
 
         for _ in range(10):
             results = self.session.execute(prepared_statement, (1, ))
             self.assertEqual(results[0], (1,))
-
-    def _prepare_with_keyspace(self, query, keyspace):
-        # This may be replaced in the future by self.session.prepare(query, keyspace)
-        # It will be decided in PYTHON-821
-
-        # We can't use the current API to do this because
-        # the prepared statement is created like PrepareMessage(query=query),
-        # without using the keyspace
-
-        session = self.session
-
-        message = PrepareMessage(query=query, keyspace=keyspace)
-        future = ResponseFuture(session, message, query=None, timeout=10)
-        future.send_request()
-        query_id, bind_metadata, pk_indexes, result_metadata = future.result()
-
-        # self.session.set_keyspace(self.ks_name)
-        prepared_keyspace = message.keyspace
-        prepared_statement = PreparedStatement.from_message(
-            query_id, bind_metadata, pk_indexes, session.cluster.metadata, query, prepared_keyspace,
-            PROTOCOL_VERSION, result_metadata)
-
-        self.cluster.add_prepared(query_id, prepared_statement)
-        if self.cluster.prepare_on_all_hosts:
-            host = future._current_host
-            session.prepare_on_all_hosts(prepared_statement.query_string, host, keyspace)
-
-        return prepared_statement

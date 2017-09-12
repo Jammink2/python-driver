@@ -1728,41 +1728,37 @@ class Cluster(object):
         log.debug("Preparing all known prepared statements against host %s", host)
         connection = None
         try:
-            connection = self.connection_factory(host.address)
-            statements = self._prepared_statements.values()
-            for keyspace, ks_statements in groupby(statements, lambda s: s.keyspace):
-                if keyspace is not None:
-                    connection.set_keyspace_blocking(keyspace)
-
-                # prepare 10 statements at a time
-                ks_statements = list(ks_statements)
-                chunks = []
-                for i in range(0, len(ks_statements), 10):
-                    chunks.append(ks_statements[i:i + 10])
-
+            def send_chunks(chunks, set_keyspace=False):
                 for ks_chunk in chunks:
-                    messages = [PrepareMessage(query=s.query_string) for s in ks_chunk]
+                    messages = [PrepareMessage(query=s.query_string,
+                                               keyspace=s.keyspace if set_keyspace else None)
+                                                    for s in ks_chunk]
                     # TODO: make this timeout configurable somehow?
                     responses = connection.wait_for_responses(*messages, timeout=5.0, fail_on_error=False)
                     for success, response in responses:
                         if not success:
                             log.debug("Got unexpected response when preparing "
                                       "statement on host %s: %r", host, response)
-            """
-            #V5 protocol / No need to set the keyspace
-            chunks = []
-            for i in range(0, len(statements), 10):
-                chunks.append(statements[i:i + 10])
 
-            for ks_chunk in chunks:
-                messages = [PrepareMessage(query=s.query_string, keyspace=s.keyspace) for s in ks_chunk]
-                # TODO: make this timeout configurable somehow?
-                responses = connection.wait_for_responses(*messages, timeout=5.0, fail_on_error=False)
-                for success, response in responses:
-                    if not success:
-                        log.debug("Got unexpected response when preparing "
-                                  "statement on host %s: %r", host, response)
-            """
+            statements = self._prepared_statements.values()
+            if ProtocolVersion.uses_keyspace_flag(self.protocol_version):
+                # V5 protocol and higher, no need to set the keyspace
+                chunks = []
+                for i in range(0, len(statements), 10):
+                    chunks.append(statements[i:i + 10])
+                    send_chunks(chunks, True)
+            else:
+                connection = self.connection_factory(host.address)
+                for keyspace, ks_statements in groupby(statements, lambda s: s.keyspace):
+                    if keyspace is not None:
+                        connection.set_keyspace_blocking(keyspace)
+
+                    # prepare 10 statements at a time
+                    ks_statements = list(ks_statements)
+                    chunks = []
+                    for i in range(0, len(ks_statements), 10):
+                        chunks.append(ks_statements[i:i + 10])
+                    send_chunks(chunks)
 
             log.debug("Done preparing all known prepared statements against host %s", host)
         except OperationTimedOut as timeout:
@@ -2232,7 +2228,7 @@ class Session(object):
         for fn, args, kwargs in self._request_init_callbacks:
             fn(response_future, *args, **kwargs)
 
-    def prepare(self, query, custom_payload=None):
+    def prepare(self, query, custom_payload=None, keyspace=None):
         """
         Prepares a query string, returning a :class:`~cassandra.query.PreparedStatement`
         instance which can be used as follows::
@@ -2261,7 +2257,7 @@ class Session(object):
         `custom_payload` is a key value map to be passed along with the prepare
         message. See :ref:`custom_payload`.
         """
-        message = PrepareMessage(query=query)
+        message = PrepareMessage(query=query, keyspace=keyspace)
         future = ResponseFuture(self, message, query=None, timeout=self.default_timeout)
         try:
             future.send_request()
@@ -2270,7 +2266,7 @@ class Session(object):
             log.exception("Error preparing query:")
             raise
 
-        prepared_keyspace = message.keyspace if message.keyspace else self.keyspace
+        prepared_keyspace = keyspace if keyspace else self.keyspace
         prepared_statement = PreparedStatement.from_message(
             query_id, bind_metadata, pk_indexes, self.cluster.metadata, query, prepared_keyspace,
             self._protocol_version, result_metadata)
